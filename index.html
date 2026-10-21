@@ -4,17 +4,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Météo">
+<meta http-equiv="refresh" content="600">
 <title>Météo</title>
-<!--
-  Page météo autonome pour vieil iPad (iOS 9 / Safari 9).
-  Les données viennent du fichier meteo.json, placé à côté de la page et
-  rafraîchi toutes les 30 min par une tâche GitHub (.github/workflows/meteo.yml)
-  qui interroge Open-Meteo. Lire un fichier du même site évite les blocages
-  de sécurité de Safari 9 sur les appels vers un autre site.
-  Code volontairement écrit en JavaScript ancien (ES5) : pas de fetch,
-  pas de let/const, pas de fonctions fléchées.
-  Pour changer de lieu : modifier VILLE ici, et latitude/longitude dans meteo.yml.
--->
+<!-- Page fabriquée automatiquement par gen.py : ne pas modifier à la main. -->
 <style>
 body{margin:0;background:#000;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
 #h{font-size:110px;font-weight:200;margin-top:40px}
@@ -28,129 +20,23 @@ td{width:20%}
 #maj.err{color:#a66}
 </style></head><body>
 <div id="h">--:--</div>
-<div class="v" id="ville"></div>
-<div id="icone"></div>
-<div id="t">--°</div>
-<div class="v" id="etat">Chargement…</div>
-<table><tr id="jours"></tr></table>
-<div id="maj"></div>
+<div class="v">Urcuit</div>
+<svg width="220" height="220" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="35" cy="52" r="17" fill="#9ab"/><circle cx="55" cy="42" r="22" fill="#9ab"/><circle cx="76" cy="55" r="15" fill="#9ab"/><rect x="35" y="52" width="41" height="18" fill="#9ab"/></svg>
+<div id="t">15°</div>
+<div class="v">Couvert · vent 12 km/h</div>
+<table><tr><td><div class="j">Auj.</div><div class="ic"><svg width="90" height="90" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="35" cy="52" r="17" fill="#9ab"/><circle cx="55" cy="42" r="22" fill="#9ab"/><circle cx="76" cy="55" r="15" fill="#9ab"/><rect x="35" y="52" width="41" height="18" fill="#9ab"/><g stroke="#5af" stroke-width="6" stroke-linecap="round"><line x1="38" y1="76" x2="34" y2="86"/><line x1="54" y1="76" x2="50" y2="86"/><line x1="70" y1="76" x2="66" y2="86"/></g></svg></div><div>17° / 9°</div><div class="s">80 %</div></td><td><div class="j">Jeu</div><div class="ic"><svg width="90" height="90" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="35" cy="52" r="17" fill="#9ab"/><circle cx="55" cy="42" r="22" fill="#9ab"/><circle cx="76" cy="55" r="15" fill="#9ab"/><rect x="35" y="52" width="41" height="18" fill="#9ab"/></svg></div><div>16° / 8°</div><div class="s">0 %</div></td><td><div class="j">Ven</div><div class="ic"><svg width="90" height="90" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="50" cy="50" r="20" fill="#fc3"/><g stroke="#fc3" stroke-width="6" stroke-linecap="round"><line x1="50" y1="12" x2="50" y2="22"/><line x1="50" y1="78" x2="50" y2="88"/><line x1="12" y1="50" x2="22" y2="50"/><line x1="78" y1="50" x2="88" y2="50"/><line x1="23" y1="23" x2="30" y2="30"/><line x1="70" y1="70" x2="77" y2="77"/><line x1="23" y1="77" x2="30" y2="70"/><line x1="70" y1="30" x2="77" y2="23"/></g></svg></div><div>19° / 7°</div><div class="s">5 %</div></td><td><div class="j">Sam</div><div class="ic"><svg width="90" height="90" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="35" cy="52" r="17" fill="#567"/><circle cx="55" cy="42" r="22" fill="#567"/><circle cx="76" cy="55" r="15" fill="#567"/><rect x="35" y="52" width="41" height="18" fill="#567"/><polygon points="55,66 42,86 52,86 47,100 66,76 55,76" fill="#fc3"/></svg></div><div>15° / 10°</div><div class="s">90 %</div></td><td><div class="j">Dim</div><div class="ic"><svg width="90" height="90" viewBox="0 0 100 100" style="display:block;margin:0 auto"><circle cx="35" cy="52" r="17" fill="#9ab"/><circle cx="55" cy="42" r="22" fill="#9ab"/><circle cx="76" cy="55" r="15" fill="#9ab"/><rect x="35" y="52" width="41" height="18" fill="#9ab"/><g fill="#cef"><circle cx="38" cy="82" r="5"/><circle cx="54" cy="88" r="5"/><circle cx="70" cy="82" r="5"/></g></svg></div><div>8° / 1°</div><div class="s">60 %</div></td></tr></table>
+<div id="maj">Données de 22:50</div>
 <script>
-var VILLE = "Urcuit";
-var REFRESH_MS = 10 * 60 * 1000;   // relecture du fichier : 10 min
-var RETRY_MS = 60 * 1000;          // nouvel essai après échec : 1 min
-
-var URL = "https://ghislainpierret-cell.github.io/ipad-meteo/meteo.json";
-var VIEUX_MS = 2 * 60 * 60 * 1000; // données de plus de 2 h : signalées en rouge
-
-var WMO = {
-  0:["Ciel dégagé","sun"],1:["Peu nuageux","partly"],2:["Partiellement nuageux","partly"],
-  3:["Couvert","cloud"],45:["Brouillard","fog"],48:["Brouillard givrant","fog"],
-  51:["Bruine légère","drizzle"],53:["Bruine","drizzle"],55:["Bruine dense","rain"],
-  61:["Pluie faible","drizzle"],63:["Pluie","rain"],65:["Forte pluie","rain"],
-  66:["Pluie verglaçante","rain"],67:["Pluie verglaçante","rain"],
-  71:["Neige faible","snow"],73:["Neige","snow"],75:["Forte neige","snow"],
-  77:["Grains de neige","snow"],80:["Averses","drizzle"],81:["Averses","rain"],
-  82:["Fortes averses","rain"],85:["Averses de neige","snow"],86:["Averses de neige","snow"],
-  95:["Orage","storm"],96:["Orage et grêle","storm"],99:["Orage et grêle","storm"]
-};
-
-function cloud(c){
-  return '<circle cx="35" cy="52" r="17" fill="'+c+'"/><circle cx="55" cy="42" r="22" fill="'+c+'"/>'+
-         '<circle cx="76" cy="55" r="15" fill="'+c+'"/><rect x="35" y="52" width="41" height="18" fill="'+c+'"/>';
-}
-var SUN = '<circle cx="50" cy="50" r="20" fill="#fc3"/><g stroke="#fc3" stroke-width="6" stroke-linecap="round">'+
-  '<line x1="50" y1="12" x2="50" y2="22"/><line x1="50" y1="78" x2="50" y2="88"/>'+
-  '<line x1="12" y1="50" x2="22" y2="50"/><line x1="78" y1="50" x2="88" y2="50"/>'+
-  '<line x1="23" y1="23" x2="30" y2="30"/><line x1="70" y1="70" x2="77" y2="77"/>'+
-  '<line x1="23" y1="77" x2="30" y2="70"/><line x1="70" y1="30" x2="77" y2="23"/></g>';
-var SMALL_SUN = '<circle cx="32" cy="30" r="15" fill="#fc3"/>';
-var DROPS = '<g stroke="#5af" stroke-width="6" stroke-linecap="round"><line x1="38" y1="78" x2="34" y2="90"/><line x1="54" y1="78" x2="50" y2="90"/><line x1="70" y1="78" x2="66" y2="90"/></g>';
-var DROPS_S = '<g stroke="#5af" stroke-width="6" stroke-linecap="round"><line x1="38" y1="76" x2="34" y2="86"/><line x1="54" y1="76" x2="50" y2="86"/><line x1="70" y1="76" x2="66" y2="86"/></g>';
-var FLAKES = '<g fill="#cef"><circle cx="38" cy="82" r="5"/><circle cx="54" cy="88" r="5"/><circle cx="70" cy="82" r="5"/></g>';
-var BOLT = '<polygon points="55,66 42,86 52,86 47,100 66,76 55,76" fill="#fc3"/>';
-var FOG = '<g stroke="#9ab" stroke-width="7" stroke-linecap="round"><line x1="22" y1="40" x2="78" y2="40"/><line x1="14" y1="56" x2="86" y2="56"/><line x1="26" y1="72" x2="74" y2="72"/></g>';
-var ICONS = {
-  sun: SUN, fog: FOG,
-  partly: SMALL_SUN + cloud("#bcd"),
-  cloud: cloud("#9ab"),
-  drizzle: cloud("#9ab") + DROPS_S,
-  rain: cloud("#789") + DROPS,
-  snow: cloud("#9ab") + FLAKES,
-  storm: cloud("#567") + BOLT
-};
-function svg(kind, px){
-  return '<svg xmlns="http://www.w3.org/2000/svg" width="'+px+'" height="'+px+'" viewBox="0 0 100 100" style="display:block;margin:0 auto">'+
-    (ICONS[kind] || cloud("#9ab")) + '</svg>';
-}
-var JOURS = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"];
-
-function $(id){ return document.getElementById(id); }
-function p(n){ return n < 10 ? "0" + n : "" + n; }
-function wmo(code){ return WMO[code] || ["", "cloud"]; }
-
+function p(n){return n<10?"0"+n:n}
+var DONNEES=new Date(2026,9,21,22,50).getTime();
 function tick(){
-  var d = new Date();
-  $("h").innerHTML = p(d.getHours()) + ":" + p(d.getMinutes());
-}
-
-// "2026-10-21" -> jour de la semaine, sans dépendre du fuseau de l'iPad
-function jourSemaine(iso){
-  var a = iso.split("-");
-  return new Date(Date.UTC(+a[0], +a[1] - 1, +a[2])).getUTCDay();
-}
-
-function afficher(d){
-  var cur = d.current, day = d.daily, w = wmo(cur.weather_code), rows = "", i;
-  $("ville").innerHTML = VILLE;
-  $("icone").innerHTML = svg(w[1], 220);
-  $("t").innerHTML = Math.round(cur.temperature_2m) + "°";
-  $("etat").innerHTML = w[0] + " · vent " + Math.round(cur.wind_speed_10m) + " km/h";
-  for (i = 0; i < day.time.length; i++) {
-    rows += '<td><div class="j">' + (i === 0 ? "Auj." : JOURS[jourSemaine(day.time[i])]) + '</div>' +
-      '<div class="ic">' + svg(wmo(day.weather_code[i])[1], 90) + '</div>' +
-      '<div>' + Math.round(day.temperature_2m_max[i]) + '° / ' + Math.round(day.temperature_2m_min[i]) + '°</div>' +
-      '<div class="s">' + (day.precipitation_probability_max[i] || 0) + ' %</div></td>';
-  }
-  $("jours").innerHTML = rows;
-  // Heure des données (heure de Paris, ex. "2026-10-21T22:30")
-  var t = String(cur.time || ""), a = t.split(/[-T:]/), age = 0;
-  if (a.length >= 5) {
-    age = new Date().getTime() - new Date(+a[0], +a[1] - 1, +a[2], +a[3], +a[4]).getTime();
-    $("maj").innerHTML = "Données de " + a[3] + ":" + a[4] +
-      (age > VIEUX_MS ? " — pas de mise à jour depuis plus de 2 h" : "");
-  } else {
-    $("maj").innerHTML = "";
-  }
-  $("maj").className = age > VIEUX_MS ? "err" : "";
-}
-
-function echec(detail){
-  // On garde le dernier affichage et on signale discrètement le problème
-  $("maj").className = "err";
-  $("maj").innerHTML = "Connexion impossible (" + detail + ") — nouvel essai dans 1 min";
-  setTimeout(charger, RETRY_MS);
-}
-
-function charger(){
-  var x = new XMLHttpRequest(), fini = false;
-  try {
-    x.open("GET", URL + "?_=" + new Date().getTime(), true);  // évite la copie en cache
-    x.onreadystatechange = function(){
-      if (x.readyState !== 4 || fini) return;
-      fini = true;
-      if (x.status === 200) {
-        try { afficher(JSON.parse(x.responseText)); setTimeout(charger, REFRESH_MS); return; }
-        catch (e) { echec("lecture : " + e.message); return; }
-      }
-      echec(x.status === 0 ? "réseau, code 0" :
-            "code " + x.status + " : " + String(x.responseText).substring(0, 120));
-    };
-    x.send();
-  } catch (e) {
-    echec("envoi : " + e.message);
+  var d=new Date();
+  document.getElementById("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
+  if(d.getTime()-DONNEES>120*60000){
+    var m=document.getElementById("maj");
+    m.className="err";
+    m.innerHTML="Données de 22:50 — pas de mise à jour depuis plus de 2 h";
   }
 }
-
-tick(); setInterval(tick, 10000);
-charger();
+tick();setInterval(tick,10000);
 </script></body></html>
