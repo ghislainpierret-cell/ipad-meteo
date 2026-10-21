@@ -28,4 +28,10 @@ jobs:
           git add index.html
           git diff --cached --quiet && exit 0
           git commit -m "Météo $(TZ=Europe/Paris date '+%d/%m %H:%M')"
-          git push
+          # Si le dépôt a bougé entre-temps (relance, autre exécution), on se
+          # recale dessus en gardant la page qui vient d'être fabriquée.
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase -X theirs origin main || exit 1
+          done
+          exit 1
