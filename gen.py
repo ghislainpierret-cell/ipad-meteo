@@ -86,7 +86,7 @@ def render(d):
         _, i2 = WMO.get(day["weather_code"][i], ("", "cloud"))
         rows += ('<td><div class="j">%s</div><div class="ic">%s</div>'
                  '<div>%d° / %d°</div><div class="s">%s %%</div></td>') % (
-            "Auj." if i == 0 else JOURS[wd], svg(i2, 90), round(day["temperature_2m_max"][i]),
+            "Auj." if i == 0 else JOURS[wd], svg(i2, 70), round(day["temperature_2m_max"][i]),
             round(day["temperature_2m_min"][i]), day["precipitation_probability_max"][i] or 0)
     # cur["time"] est en heure de Paris, ex. "2026-10-21T23:15"
     y, mo, dd, hh, mi = [int(x) for x in cur["time"].replace("T", "-").replace(":", "-").split("-")[:5]]
@@ -101,14 +101,14 @@ def render(d):
 <!-- Page fabriquée automatiquement par gen.py : ne pas modifier à la main. -->
 <style>
 body{margin:0;background:#000;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
-#h{font-size:110px;font-weight:200;margin-top:40px}
+#h{font-size:90px;font-weight:200;margin-top:14px;line-height:1.1}
 .v{font-size:30px;color:#9ab}
-#t{font-size:120px;font-weight:200}
+#t{font-size:100px;font-weight:200;line-height:1.1}
 .s{color:#889;font-size:20px}
-table{width:100%%;margin-top:40px;font-size:26px}
+table{width:100%%;margin-top:16px;font-size:26px}
 td{width:20%%}
 .j{color:#9ab;margin-bottom:6px}
-#maj{color:#556;font-size:16px;margin-top:30px}
+#maj{color:#556;font-size:16px;margin-top:12px}
 #maj.err{color:#a66}
 </style></head><body>
 <div id="h">--:--</div>
@@ -132,7 +132,7 @@ function tick(){
 }
 tick();setInterval(tick,10000);
 </script></body></html>
-""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, icon=svg(icon, 220), temp=round(cur["temperature_2m"]),
+""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, icon=svg(icon, 150), temp=round(cur["temperature_2m"]),
            label=label, vent=round(cur["wind_speed_10m"]), rows=rows,
            y=y, mo=mo - 1, dd=dd, hh=hh, mi=mi, vieux=VIEUX_MINUTES)
 
