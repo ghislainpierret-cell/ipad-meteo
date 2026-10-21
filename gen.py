@@ -92,7 +92,7 @@ def render(d):
     y, mo, dd, hh, mi = [int(x) for x in cur["time"].replace("T", "-").replace(":", "-").split("-")[:5]]
     return """<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Météo">
@@ -100,12 +100,13 @@ def render(d):
 <title>Météo</title>
 <!-- Page fabriquée automatiquement par gen.py : ne pas modifier à la main. -->
 <style>
-body{margin:0;background:#000;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
+html,body{overflow-x:hidden}
+body{margin:0;background:#000;-webkit-text-size-adjust:100%%;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
 #h{font-size:90px;font-weight:200;margin-top:14px;line-height:1.1}
 .v{font-size:30px;color:#9ab}
 #t{font-size:100px;font-weight:200;line-height:1.1}
 .s{color:#889;font-size:20px}
-table{width:100%%;margin-top:16px;font-size:26px}
+table{width:100%%;table-layout:fixed;border-collapse:collapse;margin-top:16px;font-size:24px}
 td{width:20%%}
 .j{color:#9ab;margin-bottom:6px}
 #maj{color:#556;font-size:16px;margin-top:12px}
