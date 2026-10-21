@@ -20,9 +20,14 @@ VIEUX_MINUTES = 120   # au-delà, l'heure des données s'affiche en rouge
 
 URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
        "&timezone=Europe%%2FParis&forecast_days=5"
-       "&current=temperature_2m,weather_code,wind_speed_10m"
+       "&current=temperature_2m,weather_code,wind_speed_10m,pressure_msl"
+       "&hourly=pressure_msl&past_hours=3&forecast_hours=1"
        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
        % (LAT, LON))
+
+# Couleur Tempo EDF (service gratuit api-couleur-tempo.fr, données RTE)
+TEMPO_URL = "https://www.api-couleur-tempo.fr/api/jourTempo/%s"   # today / tomorrow
+TEMPO = {1: ("Bleu", "#2f6fd6", "#fff"), 2: ("Blanc", "#eee", "#000"), 3: ("Rouge", "#d33", "#fff")}
 
 WMO = {
     0: ("Ciel dégagé", "sun"), 1: ("Peu nuageux", "partly"), 2: ("Partiellement nuageux", "partly"),
@@ -77,7 +82,51 @@ def get_json(url):
     raise last
 
 
-def render(d):
+def tempo():
+    """Couleurs Tempo du jour et du lendemain ; None si le service ne répond pas."""
+    try:
+        return [get_json(TEMPO_URL % j).get("codeJour", 0) for j in ("today", "tomorrow")]
+    except Exception as e:
+        print("Tempo indisponible :", e)
+        return None
+
+
+def pastille(code):
+    if code in TEMPO:
+        nom, fond, txt = TEMPO[code]
+        return '<span class="tp" style="background:%s;color:%s">%s</span>' % (fond, txt, nom)
+    return '<span class="tp nc">non publiée</span>'
+
+
+def ligne_tempo(t):
+    if not t:
+        return ""
+    return ('<div id="tempo">EDF Tempo · auj. %s &nbsp; demain %s</div>' % (pastille(t[0]), pastille(t[1])))
+
+
+def ligne_pression(d):
+    """Pression au niveau de la mer et tendance sur 3 h (règle du baromètre)."""
+    cur = d["current"]
+    if cur.get("pressure_msl") is None:
+        return ""
+    txt = "Pression %d hPa" % round(cur["pressure_msl"])
+    try:
+        h = d["hourly"]
+        heure = cur["time"][:13] + ":00"
+        i = h["time"].index(heure)
+        ecart = h["pressure_msl"][i] - h["pressure_msl"][i - 3]
+        if ecart >= 1:
+            txt += " · en hausse (+%d en 3 h)" % round(ecart)
+        elif ecart <= -1:
+            txt += " · en baisse (%d en 3 h)" % round(ecart)
+        else:
+            txt += " · stable"
+    except Exception:
+        pass
+    return '<div class="v2">%s</div>' % txt
+
+
+def render(d, t=None):
     cur, day = d["current"], d["daily"]
     label, icon = WMO.get(cur["weather_code"], ("", "cloud"))
     rows = ""
@@ -102,14 +151,18 @@ def render(d):
 <style>
 html,body{overflow-x:hidden}
 body{margin:0;background:#000;-webkit-text-size-adjust:100%%;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
-#h{font-size:90px;font-weight:200;margin-top:14px;line-height:1.1}
+#h{font-size:84px;font-weight:200;margin-top:10px;line-height:1.05}
 .v{font-size:30px;color:#9ab}
-#t{font-size:100px;font-weight:200;line-height:1.1}
+#t{font-size:96px;font-weight:200;line-height:1.05}
 .s{color:#889;font-size:20px}
 table{width:100%%;table-layout:fixed;border-collapse:collapse;margin-top:16px;font-size:24px}
 td{width:20%%}
 .j{color:#9ab;margin-bottom:6px}
-#maj{color:#556;font-size:16px;margin-top:12px}
+.v2{font-size:22px;color:#789;margin-top:4px}
+#tempo{font-size:22px;color:#9ab;margin-top:14px}
+.tp{display:inline-block;padding:2px 12px;border-radius:12px;font-weight:bold}
+.tp.nc{color:#667;border:1px solid #445;font-weight:normal}
+#maj{color:#556;font-size:16px;margin-top:10px}
 #maj.err{color:#a66}
 </style></head><body>
 <div id="h">--:--</div>
@@ -117,7 +170,9 @@ td{width:20%%}
 %(icon)s
 <div id="t">%(temp)d°</div>
 <div class="v">%(label)s · vent %(vent)d km/h</div>
+%(pression)s
 <table><tr>%(rows)s</tr></table>
+%(tempo)s
 <div id="maj">Données de %(hh)02d:%(mi)02d</div>
 <script>
 function p(n){return n<10?"0"+n:n}
@@ -133,8 +188,9 @@ function tick(){
 }
 tick();setInterval(tick,10000);
 </script></body></html>
-""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, icon=svg(icon, 150), temp=round(cur["temperature_2m"]),
+""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, icon=svg(icon, 130), temp=round(cur["temperature_2m"]),
            label=label, vent=round(cur["wind_speed_10m"]), rows=rows,
+           pression=ligne_pression(d), tempo=ligne_tempo(t),
            y=y, mo=mo - 1, dd=dd, hh=hh, mi=mi, vieux=VIEUX_MINUTES)
 
 
@@ -142,9 +198,11 @@ if __name__ == "__main__":
     sortie = sys.argv[1] if len(sys.argv) > 1 else "index.html"
     if len(sys.argv) > 2:   # test hors ligne : python3 gen.py sortie.html donnees.json
         data = json.load(open(sys.argv[2]))
+        t = data.get("_tempo")
     else:
         data = get_json(URL)
-    html = render(data)    # échoue avant d'écrire si les données sont incomplètes
+        t = tempo()        # une panne Tempo n'empêche pas la météo
+    html = render(data, t)    # échoue avant d'écrire si les données sont incomplètes
     with open(sortie, "w", encoding="utf-8") as f:
         f.write(html)
     print("Page écrite :", sortie)
