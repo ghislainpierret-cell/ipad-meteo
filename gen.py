@@ -6,24 +6,32 @@ du HTML déjà rempli, sans chargement en arrière-plan : le Safari d'iOS 9
 lancé depuis l'écran d'accueil refuse ces chargements (erreur « code 0 »).
 La page se recharge elle-même toutes les 10 min.
 
+Les tâches programmées de GitHub sautent souvent des passages : la page embarque
+donc les prévisions heure par heure sur 48 h (blocs HTML déjà fabriqués), et
+l'iPad affiche lui-même le bloc de l'heure en cours. L'affichage reste juste même
+si GitHub ne passe que quelques fois par jour.
+
 Usage : python3 gen.py [fichier_sortie]
 """
+import datetime
 import json
 import sys
 import time
 import urllib.request
+from zoneinfo import ZoneInfo
 
 VILLE = "Urcuit"
 LAT, LON = 43.487, -1.338
 REFRESH_SECONDS = 600
-VIEUX_MINUTES = 120   # au-delà, l'heure des données s'affiche en rouge
+HEURES = 48           # prévisions horaires embarquées dans la page
+VIEUX_HEURES = 12     # au-delà, l'heure des prévisions s'affiche en rouge
 
 URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
-       "&timezone=Europe%%2FParis&forecast_days=5"
-       "&current=temperature_2m,weather_code,wind_speed_10m,pressure_msl"
-       "&hourly=pressure_msl&past_hours=3&forecast_hours=1"
+       "&timezone=Europe%%2FParis&forecast_days=7"
+       "&hourly=temperature_2m,weather_code,wind_speed_10m,pressure_msl"
+       "&past_hours=3&forecast_hours=%d"
        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-       % (LAT, LON))
+       % (LAT, LON, HEURES + 1))
 
 # Couleur Tempo EDF (service gratuit api-couleur-tempo.fr, données RTE)
 TEMPO_URL = "https://www.api-couleur-tempo.fr/api/jourTempo/%s"   # today / tomorrow
@@ -83,12 +91,15 @@ def get_json(url):
 
 
 def tempo():
-    """Couleurs Tempo du jour et du lendemain ; None si le service ne répond pas."""
-    try:
-        return [get_json(TEMPO_URL % j).get("codeJour", 0) for j in ("today", "tomorrow")]
-    except Exception as e:
-        print("Tempo indisponible :", e)
-        return None
+    """{date Tempo: code} pour aujourd'hui et demain ; {} si le service ne répond pas."""
+    res = {}
+    for j in ("today", "tomorrow"):
+        try:
+            r = get_json(TEMPO_URL % j)
+            res[r["dateJour"]] = r.get("codeJour", 0)
+        except Exception as e:
+            print("Tempo indisponible (%s) : %s" % (j, e))
+    return res
 
 
 def pastille(code):
@@ -98,22 +109,22 @@ def pastille(code):
     return '<span class="tp nc">non publiée</span>'
 
 
-def ligne_tempo(t):
+def ligne_tempo(t, heure):
+    """Le jour Tempo va de 6 h à 6 h : à 2 h du matin, c'est encore la couleur de la veille."""
     if not t:
         return ""
-    return ('<div id="tempo">EDF Tempo · auj. %s &nbsp; demain %s</div>' % (pastille(t[0]), pastille(t[1])))
-
-
-def ligne_pression(d):
-    """Pression au niveau de la mer et tendance sur 3 h (règle du baromètre)."""
-    cur = d["current"]
-    if cur.get("pressure_msl") is None:
+    jt = datetime.datetime.strptime(heure, "%Y-%m-%dT%H:%M") - datetime.timedelta(hours=6)
+    auj, dem = jt.strftime("%Y-%m-%d"), (jt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    if auj not in t:
         return ""
-    txt = "Pression %d hPa" % round(cur["pressure_msl"])
-    try:
-        h = d["hourly"]
-        heure = cur["time"][:13] + ":00"
-        i = h["time"].index(heure)
+    return '<div id="tempo">EDF Tempo · auj. %s &nbsp; demain %s</div>' % (pastille(t[auj]), pastille(t.get(dem, 0)))
+
+
+def bloc_heure(h, i, t):
+    """Partie haute de la page pour l'heure n° i des prévisions horaires."""
+    label, icon = WMO.get(h["weather_code"][i], ("", "cloud"))
+    txt = "Pression %d hPa" % round(h["pressure_msl"][i])
+    if i >= 3:
         ecart = h["pressure_msl"][i] - h["pressure_msl"][i - 3]
         if ecart >= 1:
             txt += " · en hausse (+%d en 3 h)" % round(ecart)
@@ -121,24 +132,41 @@ def ligne_pression(d):
             txt += " · en baisse (%d en 3 h)" % round(ecart)
         else:
             txt += " · stable"
-    except Exception:
-        pass
-    return '<div class="v2">%s</div>' % txt
+    haut = ('%s<div id="t">%d°</div><div class="v">%s · vent %d km/h</div><div class="v2">%s</div>'
+            % (svg(icon, 130), round(h["temperature_2m"][i]), label, round(h["wind_speed_10m"][i]), txt))
+    return haut, ligne_tempo(t, h["time"][i])
 
 
-def render(d, t=None):
-    cur, day = d["current"], d["daily"]
-    label, icon = WMO.get(cur["weather_code"], ("", "cloud"))
+def ligne_jours(day, k):
+    """Les 5 colonnes de prévisions à partir du jour n° k."""
     rows = ""
-    for i, date in enumerate(day["time"]):
-        wd = time.strptime(date, "%Y-%m-%d").tm_wday
+    for i in range(k, min(k + 5, len(day["time"]))):
+        wd = time.strptime(day["time"][i], "%Y-%m-%d").tm_wday
         _, i2 = WMO.get(day["weather_code"][i], ("", "cloud"))
         rows += ('<td><div class="j">%s</div><div class="ic">%s</div>'
                  '<div>%d° / %d°</div><div class="s">%s %%</div></td>') % (
-            "Auj." if i == 0 else JOURS[wd], svg(i2, 70), round(day["temperature_2m_max"][i]),
+            "Auj." if i == k else JOURS[wd], svg(i2, 70), round(day["temperature_2m_max"][i]),
             round(day["temperature_2m_min"][i]), day["precipitation_probability_max"][i] or 0)
-    # cur["time"] est en heure de Paris, ex. "2026-10-21T23:15"
-    y, mo, dd, hh, mi = [int(x) for x in cur["time"].replace("T", "-").replace(":", "-").split("-")[:5]]
+    return "<table><tr>%s</tr></table>" % rows
+
+
+def js(obj):
+    return json.dumps(obj, ensure_ascii=True, separators=(",", ":")).replace("</", "<\\/")
+
+
+def render(d, t, maintenant):
+    h, day = d["hourly"], d["daily"]
+    hautes, tempos = {}, {}
+    for i, heure in enumerate(h["time"]):
+        if i < 3:          # les 3 heures passées ne servent qu'à la tendance de pression
+            continue
+        hautes[heure[:13]], tempos[heure[:13]] = bloc_heure(h, i, t)
+    jours = {}
+    for k in range(3):     # aujourd'hui, demain, après-demain
+        jours[day["time"][k]] = ligne_jours(day, k)
+    cle = maintenant.strftime("%Y-%m-%dT%H")
+    if cle not in hautes:
+        cle = sorted(hautes)[0]
     return """<!DOCTYPE html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -167,42 +195,48 @@ td{width:20%%}
 </style></head><body>
 <div id="h">--:--</div>
 <div class="v">%(ville)s</div>
-%(icon)s
-<div id="t">%(temp)d°</div>
-<div class="v">%(label)s · vent %(vent)d km/h</div>
-%(pression)s
-<table><tr>%(rows)s</tr></table>
-%(tempo)s
-<div id="maj">Données de %(hh)02d:%(mi)02d</div>
+<div id="haut">%(haut0)s</div>
+<div id="jours">%(jours0)s</div>
+<div id="tp">%(tempo0)s</div>
+<div id="maj">Prévisions de %(gen)s</div>
 <script>
-function p(n){return n<10?"0"+n:n}
-var DONNEES=new Date(%(y)d,%(mo)d,%(dd)d,%(hh)d,%(mi)d).getTime();
+var HAUT=%(hautes)s;
+var TEMPO=%(tempos)s;
+var JOURS=%(jours)s;
+var GEN=new Date(%(gy)d,%(gmo)d,%(gd)d,%(gh)d,%(gmi)d).getTime();
+var dejaH="%(cle)s", dejaJ="%(jour0)s";
+function p(n){return n<10?"0"+n:""+n}
+function $(id){return document.getElementById(id)}
 function tick(){
   var d=new Date();
-  document.getElementById("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
-  if(d.getTime()-DONNEES>%(vieux)d*60000){
-    var m=document.getElementById("maj");
-    m.className="err";
-    m.innerHTML="Données de %(hh)02d:%(mi)02d — pas de mise à jour depuis plus de 2 h";
-  }
+  $("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
+  var jour=d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
+  var cle=jour+"T"+p(d.getHours());
+  if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; dejaH=cle; }
+  if(jour!==dejaJ && JOURS[jour]){ $("jours").innerHTML=JOURS[jour]; dejaJ=jour; }
+  var vieux=(d.getTime()-GEN>%(vieux)d*3600000)||!HAUT[cle];
+  $("maj").className=vieux?"err":"";
+  $("maj").innerHTML="Prévisions de %(gen)s"+(vieux?" — pas de mise à jour depuis longtemps":"");
 }
 tick();setInterval(tick,10000);
 </script></body></html>
-""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, icon=svg(icon, 130), temp=round(cur["temperature_2m"]),
-           label=label, vent=round(cur["wind_speed_10m"]), rows=rows,
-           pression=ligne_pression(d), tempo=ligne_tempo(t),
-           y=y, mo=mo - 1, dd=dd, hh=hh, mi=mi, vieux=VIEUX_MINUTES)
+""" % dict(refresh=REFRESH_SECONDS, ville=VILLE, haut0=hautes[cle], tempo0=tempos[cle],
+           jours0=jours[day["time"][0]], jour0=day["time"][0], cle=cle,
+           hautes=js(hautes), tempos=js(tempos), jours=js(jours),
+           gen=maintenant.strftime("%H:%M"), gy=maintenant.year, gmo=maintenant.month - 1,
+           gd=maintenant.day, gh=maintenant.hour, gmi=maintenant.minute, vieux=VIEUX_HEURES)
 
 
 if __name__ == "__main__":
     sortie = sys.argv[1] if len(sys.argv) > 1 else "index.html"
     if len(sys.argv) > 2:   # test hors ligne : python3 gen.py sortie.html donnees.json
         data = json.load(open(sys.argv[2]))
-        t = data.get("_tempo")
+        t = data.get("_tempo", {})
     else:
         data = get_json(URL)
         t = tempo()        # une panne Tempo n'empêche pas la météo
-    html = render(data, t)    # échoue avant d'écrire si les données sont incomplètes
+    maintenant = datetime.datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    html = render(data, t, maintenant)    # échoue avant d'écrire si les données sont incomplètes
     with open(sortie, "w", encoding="utf-8") as f:
         f.write(html)
-    print("Page écrite :", sortie)
+    print("Page écrite :", sortie, "(%d Ko)" % (len(html.encode("utf-8")) // 1024))
