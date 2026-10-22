@@ -28,9 +28,9 @@ VIEUX_HEURES = 12     # au-delà, l'heure des prévisions s'affiche en rouge
 
 URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
        "&timezone=Europe%%2FParis&forecast_days=7"
-       "&hourly=temperature_2m,weather_code,wind_speed_10m,pressure_msl"
+       "&hourly=temperature_2m,weather_code,wind_speed_10m,pressure_msl,precipitation,precipitation_probability"
        "&past_hours=3&forecast_hours=%d"
-       "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+       "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration"
        % (LAT, LON, HEURES + 1))
 
 # Couleur Tempo EDF (service gratuit api-couleur-tempo.fr, données RTE)
@@ -133,7 +133,7 @@ def bloc_heure(h, i, t):
         else:
             txt += " · stable"
     haut = ('%s<div id="t">%d°</div><div class="v">%s · vent %d km/h</div><div class="v2">%s</div>'
-            % (svg(icon, 130), round(h["temperature_2m"][i]), label, round(h["wind_speed_10m"][i]), txt))
+            % (svg(icon, 100), round(h["temperature_2m"][i]), label, round(h["wind_speed_10m"][i]), txt))
     return haut, ligne_tempo(t, h["time"][i])
 
 
@@ -150,6 +150,34 @@ def ligne_jours(day, k):
     return "<table><tr>%s</tr></table>" % rows
 
 
+LUNES = [(1.84, "\U0001F311", "Nouvelle lune"), (5.53, "\U0001F312", "Premier croissant"),
+         (9.22, "\U0001F313", "Premier quartier"), (12.91, "\U0001F314", "Gibbeuse croissante"),
+         (16.61, "\U0001F315", "Pleine lune"), (20.30, "\U0001F316", "Gibbeuse décroissante"),
+         (23.99, "\U0001F317", "Dernier quartier"), (27.68, "\U0001F318", "Dernier croissant"),
+         (99, "\U0001F311", "Nouvelle lune")]
+
+
+def lune(date):
+    """Phase de la lune à midi (âge depuis la nouvelle lune de référence du 6/1/2000)."""
+    j = datetime.datetime.strptime(date, "%Y-%m-%d").replace(hour=11)   # ~midi à Paris, en UTC
+    age = ((j - datetime.datetime(2000, 1, 6, 18, 14)).total_seconds() / 86400.0) % 29.530588853
+    for lim, emoji, nom in LUNES:
+        if age < lim:
+            return '<span class="lu">%s</span> %s' % (emoji, nom)
+
+
+def ligne_ciel(day, k):
+    """Lever / coucher du soleil, durée du jour et phase de la lune pour le jour n° k."""
+    try:
+        lev, cou = day["sunrise"][k][11:16], day["sunset"][k][11:16]
+        dur = int(day["daylight_duration"][k] // 60)
+        soleil = ('<span class="so">\u2600\ufe0e</span> lever %s · coucher %s (%d h %02d)'
+                  % (lev, cou, dur // 60, dur % 60))
+    except Exception:
+        soleil = ""
+    return soleil + (" &nbsp;·&nbsp; " if soleil else "") + lune(day["time"][k])
+
+
 def js(obj):
     return json.dumps(obj, ensure_ascii=True, separators=(",", ":")).replace("</", "<\\/")
 
@@ -161,9 +189,14 @@ def render(d, t, maintenant):
         if i < 3:          # les 3 heures passées ne servent qu'à la tendance de pression
             continue
         hautes[heure[:13]], tempos[heure[:13]] = bloc_heure(h, i, t)
-    jours = {}
+    # pluie heure par heure : [mm, probabilité %] ; la frise des 12 h est dessinée par l'iPad
+    pluie = {"t": [x[:13] for x in h["time"][3:]],
+             "mm": [round(x or 0, 1) for x in h["precipitation"][3:]],
+             "pr": [x or 0 for x in h["precipitation_probability"][3:]]}
+    jours, ciel = {}, {}
     for k in range(3):     # aujourd'hui, demain, après-demain
         jours[day["time"][k]] = ligne_jours(day, k)
+        ciel[day["time"][k]] = ligne_ciel(day, k)
     cle = maintenant.strftime("%Y-%m-%dT%H")
     if cle not in hautes:
         cle = sorted(hautes)[0]
@@ -179,15 +212,23 @@ def render(d, t, maintenant):
 <style>
 html,body{overflow-x:hidden}
 body{margin:0;background:#000;-webkit-text-size-adjust:100%%;color:#eee;font-family:Helvetica,Arial,sans-serif;text-align:center}
-#h{font-size:84px;font-weight:200;margin-top:10px;line-height:1.05}
-.v{font-size:30px;color:#9ab}
-#t{font-size:96px;font-weight:200;line-height:1.05}
+#h{font-size:72px;font-weight:200;margin-top:6px;line-height:1}
+.v{font-size:28px;color:#9ab}
+#t{font-size:84px;font-weight:200;line-height:1}
 .s{color:#889;font-size:20px}
-table{width:100%%;table-layout:fixed;border-collapse:collapse;margin-top:16px;font-size:24px}
+table{width:100%%;table-layout:fixed;border-collapse:collapse;margin-top:10px;font-size:24px}
 td{width:20%%}
 .j{color:#9ab;margin-bottom:6px}
 .v2{font-size:22px;color:#789;margin-top:4px}
-#tempo{font-size:22px;color:#9ab;margin-top:14px}
+#tempo{font-size:22px;color:#9ab;margin-top:10px}
+#ciel{font-size:20px;color:#789;margin-top:8px}
+.lu{font-size:22px}
+.so{color:#fc3}
+#pluie{width:86%%;margin:10px auto 0;font-size:14px;color:#667}
+#pluie table{margin:0}
+#pluie td{width:auto;vertical-align:bottom;padding:0 2px;font-size:14px;color:#667}
+.bar{background:#5af;border-radius:3px 3px 0 0;margin:0 auto;width:80%%}
+.sec{font-size:20px;color:#678;padding:14px 0}
 .tp{display:inline-block;padding:2px 12px;border-radius:12px;font-weight:bold}
 .tp.nc{color:#667;border:1px solid #445;font-weight:normal}
 #maj{color:#556;font-size:16px;margin-top:10px}
@@ -196,24 +237,45 @@ td{width:20%%}
 <div id="h">--:--</div>
 <div class="v">%(ville)s</div>
 <div id="haut">%(haut0)s</div>
+<div id="pluie"></div>
 <div id="jours">%(jours0)s</div>
 <div id="tp">%(tempo0)s</div>
+<div id="ciel">%(ciel0)s</div>
 <div id="maj">Prévisions de %(gen)s</div>
 <script>
 var HAUT=%(hautes)s;
 var TEMPO=%(tempos)s;
 var JOURS=%(jours)s;
+var CIEL=%(ciels)s;
+var PLUIE=%(pluie)s;
 var GEN=new Date(%(gy)d,%(gmo)d,%(gd)d,%(gh)d,%(gmi)d).getTime();
-var dejaH="%(cle)s", dejaJ="%(jour0)s";
+var dejaH="", dejaJ="%(jour0)s";
 function p(n){return n<10?"0"+n:""+n}
 function $(id){return document.getElementById(id)}
+// Frise de pluie des 12 prochaines heures (barres proportionnelles aux mm/h)
+function pluie(cle){
+  var i, k=-1, n=12, html="", lab="", mx=0, tot=0;
+  for(i=0;i<PLUIE.t.length;i++){ if(PLUIE.t[i]===cle){ k=i; break; } }
+  if(k<0) return "";
+  for(i=k;i<k+n&&i<PLUIE.t.length;i++){ tot+=PLUIE.mm[i]; if(PLUIE.mm[i]>mx) mx=PLUIE.mm[i]; }
+  if(tot<0.2) return '<div class="sec">Pas de pluie prévue d\\'ici 12 h</div>';
+  var echelle=mx<2?2:mx;
+  for(i=k;i<k+n&&i<PLUIE.t.length;i++){
+    var mm=PLUIE.mm[i], pr=PLUIE.pr[i], hgt=mm>=0.1?Math.max(3,Math.round(mm/echelle*44)):0;
+    var op=pr>=60?1:(pr>=30?0.65:0.35);
+    html+='<td><div class="bar" style="height:'+hgt+'px;opacity:'+op+'"></div></td>';
+    lab+='<td>'+((i-k)%%3===0?PLUIE.t[i].substring(11,13)+"h":"")+'</td>';
+  }
+  return '<div style="text-align:left;margin-bottom:2px">Pluie 12 h · max '+String(mx).replace(".",",")+' mm/h</div>'+
+    '<table><tr style="height:46px">'+html+'</tr><tr>'+lab+'</tr></table>';
+}
 function tick(){
   var d=new Date();
   $("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
   var jour=d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
   var cle=jour+"T"+p(d.getHours());
-  if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; dejaH=cle; }
-  if(jour!==dejaJ && JOURS[jour]){ $("jours").innerHTML=JOURS[jour]; dejaJ=jour; }
+  if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; $("pluie").innerHTML=pluie(cle); dejaH=cle; }
+  if(jour!==dejaJ && JOURS[jour]){ $("jours").innerHTML=JOURS[jour]; $("ciel").innerHTML=CIEL[jour]; dejaJ=jour; }
   var vieux=(d.getTime()-GEN>%(vieux)d*3600000)||!HAUT[cle];
   $("maj").className=vieux?"err":"";
   $("maj").innerHTML="Prévisions de %(gen)s"+(vieux?" — pas de mise à jour depuis longtemps":"");
@@ -223,6 +285,7 @@ tick();setInterval(tick,10000);
 """ % dict(refresh=REFRESH_SECONDS, ville=VILLE, haut0=hautes[cle], tempo0=tempos[cle],
            jours0=jours[day["time"][0]], jour0=day["time"][0], cle=cle,
            hautes=js(hautes), tempos=js(tempos), jours=js(jours),
+           ciel0=ciel[day["time"][0]], ciels=js(ciel), pluie=js(pluie),
            gen=maintenant.strftime("%H:%M"), gy=maintenant.year, gmo=maintenant.month - 1,
            gd=maintenant.day, gh=maintenant.hour, gmi=maintenant.minute, vieux=VIEUX_HEURES)
 
