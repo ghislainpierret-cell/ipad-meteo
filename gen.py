@@ -178,11 +178,60 @@ def ligne_ciel(day, k):
     return soleil + (" &nbsp;·&nbsp; " if soleil else "") + lune(day["time"][k])
 
 
+# Vigilance Météo-France, relayée sans clé par le flux européen MeteoAlarm
+ALERTES_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-france"
+DEPT_NOMS = ("Pyrénées-Atlantiques",)
+DEPT_CODES = ("FR615", "FRI15")          # code NUTS du département (ancienne et nouvelle nomenclature)
+NIVEAUX = {"Moderate": 1, "Severe": 2, "Extreme": 3}   # jaune, orange, rouge
+PHENOMENES = [("thunder", "Orages"), ("rain-flood", "Pluie-inondation"), ("flood", "Crues"),
+              ("wind", "Vent violent"), ("snow", "Neige-verglas"), ("ice", "Neige-verglas"),
+              ("avalanche", "Avalanches"), ("high-temperature", "Canicule"), ("heat", "Canicule"),
+              ("low-temperature", "Grand froid"), ("cold", "Grand froid"), ("coastal", "Vagues-submersion"),
+              ("wave", "Vagues-submersion"), ("fog", "Brouillard")]
+
+
+def alertes():
+    """Liste des vigilances du département : [phénomène, niveau 1-3, début ms, fin ms]."""
+    import xml.etree.ElementTree as ET
+    req = urllib.request.Request(ALERTES_URL, headers={"User-Agent": "ipad-meteo (GitHub Actions)"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        racine = ET.fromstring(r.read())
+    def champ(e, nom):
+        for x in e.iter():
+            if x.tag.split("}")[-1] == nom:
+                return (x.text or "").strip()
+        return ""
+    res = []
+    for e in racine:
+        if e.tag.split("}")[-1] != "entry":
+            continue
+        zone = champ(e, "areaDesc")
+        codes = [(x.text or "").strip() for x in e.iter() if x.tag.split("}")[-1] == "value"]
+        if not (any(n in zone for n in DEPT_NOMS) or any(c in codes for c in DEPT_CODES)):
+            continue
+        if champ(e, "message_type") == "Cancel" or champ(e, "status") not in ("", "Actual"):
+            continue
+        niv = NIVEAUX.get(champ(e, "severity"))
+        if not niv:
+            continue
+        ev = champ(e, "event").lower()
+        nom = next((n for k, n in PHENOMENES if k in ev), champ(e, "event"))
+        def ms(txt):
+            return int(datetime.datetime.fromisoformat(txt.replace("Z", "+00:00")).timestamp() * 1000)
+        try:
+            debut = ms(champ(e, "onset") or champ(e, "effective"))
+            fin = ms(champ(e, "expires"))
+        except Exception:
+            continue
+        res.append([nom, niv, debut, fin])
+    return res
+
+
 def js(obj):
     return json.dumps(obj, ensure_ascii=True, separators=(",", ":")).replace("</", "<\\/")
 
 
-def render(d, t, maintenant):
+def render(d, t, maintenant, al=None):
     h, day = d["hourly"], d["daily"]
     hautes, tempos = {}, {}
     for i, heure in enumerate(h["time"]):
@@ -224,6 +273,7 @@ td{width:20%%}
 #ciel{font-size:20px;color:#789;margin-top:8px}
 .lu{font-size:22px}
 .so{color:#fc3}
+.al{display:inline-block;margin-left:10px;padding:1px 10px;border-radius:10px;font-size:20px;font-weight:bold;vertical-align:4px}
 #pluie{width:86%%;margin:10px auto 0;font-size:14px;color:#667}
 #pluie table{margin:0}
 #pluie td{width:auto;vertical-align:bottom;padding:0 2px;font-size:14px;color:#667}
@@ -235,7 +285,7 @@ td{width:20%%}
 #maj.err{color:#a66}
 </style></head><body>
 <div id="h">--:--</div>
-<div class="v">%(ville)s</div>
+<div class="v">%(ville)s<span id="al"></span></div>
 <div id="haut">%(haut0)s</div>
 <div id="pluie"></div>
 <div id="jours">%(jours0)s</div>
@@ -248,6 +298,20 @@ var TEMPO=%(tempos)s;
 var JOURS=%(jours)s;
 var CIEL=%(ciels)s;
 var PLUIE=%(pluie)s;
+var ALERTES=%(alertes)s;
+var COUL=["","#f2c200","#f28c00","#e01b1b"], TXT=["","#000","#000","#fff"];
+// Vigilances en cours (jaune / orange / rouge), avec leur heure de fin
+function vigilance(){
+  var now=new Date().getTime(), html="", i, a, f;
+  for(i=0;i<ALERTES.length;i++){
+    a=ALERTES[i];
+    if(now<a[2]||now>a[3]) continue;
+    f=new Date(a[3]);
+    html+='<span class="al" style="background:'+COUL[a[1]]+';color:'+TXT[a[1]]+'">\u26a0\ufe0e '+a[0]+
+      ' \u00b7 jusqu\\'\u00e0 '+p(f.getHours())+'h</span>';
+  }
+  return html;
+}
 var GEN=new Date(%(gy)d,%(gmo)d,%(gd)d,%(gh)d,%(gmi)d).getTime();
 var dejaH="", dejaJ="%(jour0)s";
 function p(n){return n<10?"0"+n:""+n}
@@ -272,6 +336,7 @@ function pluie(cle){
 function tick(){
   var d=new Date();
   $("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
+  $("al").innerHTML=vigilance();
   var jour=d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
   var cle=jour+"T"+p(d.getHours());
   if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; $("pluie").innerHTML=pluie(cle); dejaH=cle; }
@@ -285,7 +350,7 @@ tick();setInterval(tick,10000);
 """ % dict(refresh=REFRESH_SECONDS, ville=VILLE, haut0=hautes[cle], tempo0=tempos[cle],
            jours0=jours[day["time"][0]], jour0=day["time"][0], cle=cle,
            hautes=js(hautes), tempos=js(tempos), jours=js(jours),
-           ciel0=ciel[day["time"][0]], ciels=js(ciel), pluie=js(pluie),
+           ciel0=ciel[day["time"][0]], ciels=js(ciel), pluie=js(pluie), alertes=js(al or []),
            gen=maintenant.strftime("%H:%M"), gy=maintenant.year, gmo=maintenant.month - 1,
            gd=maintenant.day, gh=maintenant.hour, gmi=maintenant.minute, vieux=VIEUX_HEURES)
 
@@ -295,11 +360,18 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:   # test hors ligne : python3 gen.py sortie.html donnees.json
         data = json.load(open(sys.argv[2]))
         t = data.get("_tempo", {})
+        al = data.get("_alertes", [])
     else:
         data = get_json(URL)
         t = tempo()        # une panne Tempo n'empêche pas la météo
+        try:
+            al = alertes()
+            print("Vigilances %s :" % DEPT_NOMS[0], al or "aucune")
+        except Exception as e:
+            print("Vigilance indisponible :", e)
+            al = []
     maintenant = datetime.datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
-    html = render(data, t, maintenant)    # échoue avant d'écrire si les données sont incomplètes
+    html = render(data, t, maintenant, al)    # échoue avant d'écrire si les données sont incomplètes
     with open(sortie, "w", encoding="utf-8") as f:
         f.write(html)
     print("Page écrite :", sortie, "(%d Ko)" % (len(html.encode("utf-8")) // 1024))
