@@ -33,6 +33,24 @@ URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration"
        % (LAT, LON, HEURES + 1))
 
+# Modèles Météo-France (AROME 1,3-2,5 km sur 2 jours, puis ARPEGE jusqu'à 4 jours).
+# Ce qu'ils ne fournissent pas (probabilité de pluie, jours au-delà de 4 jours) est
+# complété par le choix automatique d'Open-Meteo.
+MODELE = "meteofrance_seamless"
+
+
+def fusion(mf, auto):
+    """Données Météo-France, trous complétés par le choix automatique d'Open-Meteo."""
+    for part in ("hourly", "daily"):
+        a, m = auto[part], mf[part]
+        if m.get("time") != a.get("time"):
+            raise ValueError("échéances différentes entre les deux réponses (%s)" % part)
+        for var, vals in a.items():
+            mv = m.get(var) or [None] * len(vals)
+            m[var] = [x if x is not None else y for x, y in zip(mv, vals)]
+    return mf
+
+
 # Couleur Tempo EDF (service gratuit api-couleur-tempo.fr, données RTE)
 TEMPO_URL = "https://www.api-couleur-tempo.fr/api/jourTempo/%s"   # today / tomorrow
 TEMPO = {1: ("Bleu", "#2f6fd6", "#fff"), 2: ("Blanc", "#eee", "#000"), 3: ("Rouge", "#d33", "#fff")}
@@ -141,6 +159,8 @@ def ligne_jours(day, k):
     """Les 5 colonnes de prévisions à partir du jour n° k."""
     rows = ""
     for i in range(k, min(k + 5, len(day["time"]))):
+        if day["temperature_2m_max"][i] is None or day["temperature_2m_min"][i] is None:
+            break          # au-delà de l'échéance des modèles
         wd = time.strptime(day["time"][i], "%Y-%m-%d").tm_wday
         _, i2 = WMO.get(day["weather_code"][i], ("", "cloud"))
         rows += ('<td><div class="j">%s</div><div class="ic">%s</div>'
@@ -291,7 +311,7 @@ td{width:20%%}
 <div id="jours">%(jours0)s</div>
 <div id="tp">%(tempo0)s</div>
 <div id="ciel">%(ciel0)s</div>
-<div id="maj">Prévisions de %(gen)s</div>
+<div id="maj">Prévisions Météo-France de %(gen)s</div>
 <script>
 var HAUT=%(hautes)s;
 var TEMPO=%(tempos)s;
@@ -343,7 +363,7 @@ function tick(){
   if(jour!==dejaJ && JOURS[jour]){ $("jours").innerHTML=JOURS[jour]; $("ciel").innerHTML=CIEL[jour]; dejaJ=jour; }
   var vieux=(d.getTime()-GEN>%(vieux)d*3600000)||!HAUT[cle];
   $("maj").className=vieux?"err":"";
-  $("maj").innerHTML="Prévisions de %(gen)s"+(vieux?" — pas de mise à jour depuis longtemps":"");
+  $("maj").innerHTML="Prévisions Météo-France de %(gen)s"+(vieux?" — pas de mise à jour depuis longtemps":"");
 }
 tick();setInterval(tick,10000);
 </script></body></html>
@@ -362,7 +382,16 @@ if __name__ == "__main__":
         t = data.get("_tempo", {})
         al = data.get("_alertes", [])
     else:
-        data = get_json(URL)
+        try:
+            data = get_json(URL + "&models=" + MODELE)
+        except Exception as e:      # Météo-France indisponible : choix automatique seul
+            print("Modèles Météo-France indisponibles :", e)
+            data = get_json(URL)
+        else:
+            try:
+                data = fusion(data, get_json(URL))
+            except Exception as e:  # sans complément : on garde Météo-France seul
+                print("Complément Open-Meteo indisponible :", e)
         t = tempo()        # une panne Tempo n'empêche pas la météo
         try:
             al = alertes()
