@@ -380,16 +380,20 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:   # test hors ligne : python3 gen.py sortie.html donnees.json
         data = json.load(open(sys.argv[2]))
         t = data.get("_tempo", {})
+        source = "test"
         al = data.get("_alertes", [])
     else:
         try:
             data = get_json(URL + "&models=" + MODELE)
+            source = MODELE
         except Exception as e:      # Météo-France indisponible : choix automatique seul
             print("Modèles Météo-France indisponibles :", e)
             data = get_json(URL)
+            source = "choix automatique Open-Meteo (Météo-France indisponible)"
         else:
             try:
                 data = fusion(data, get_json(URL))
+                source += " + complément Open-Meteo"
             except Exception as e:  # sans complément : on garde Météo-France seul
                 print("Complément Open-Meteo indisponible :", e)
         t = tempo()        # une panne Tempo n'empêche pas la météo
@@ -401,6 +405,7 @@ if __name__ == "__main__":
             al = []
     maintenant = datetime.datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
     html = render(data, t, maintenant, al)    # échoue avant d'écrire si les données sont incomplètes
+    html += "<!-- Source des prévisions : %s -->\n" % source
     with open(sortie, "w", encoding="utf-8") as f:
         f.write(html)
     print("Page écrite :", sortie, "(%d Ko)" % (len(html.encode("utf-8")) // 1024))
