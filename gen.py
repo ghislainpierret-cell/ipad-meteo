@@ -147,6 +147,39 @@ def val(h, var, i):
     return v[i] if v and i < len(v) else None
 
 
+# Ciel observé : bulletin METAR de l'aéroport de Biarritz (~15 km), public et sans clé
+# (service météo aéronautique américain aviationweather.gov, qui relaie les METAR).
+METAR_URL = "https://aviationweather.gov/api/data/metar?ids=LFBZ&format=json"
+OBS = None         # ("AAAA-MM-JJTHH" heure de Paris, libellé, icône) ou None
+COUV = {"FEW": ("Peu nuageux", "sun"), "SCT": ("Éclaircies", "partly"),
+        "BKN": ("Très nuageux", "cloud"), "OVC": ("Couvert", "cloud"), "OVX": ("Couvert", "cloud")}
+
+
+def observation(maintenant):
+    """Ciel observé à Biarritz si le bulletin a moins de 90 min, sinon None."""
+    req = urllib.request.Request(METAR_URL, headers={"User-Agent": "ipad-meteo (GitHub Actions)"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        m = json.loads(r.read().decode("utf-8"))[0]
+    quand = datetime.datetime.fromtimestamp(m["obsTime"], ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    if abs((maintenant - quand).total_seconds()) > 90 * 60:
+        return None
+    wx = (m.get("wxString") or "").upper()
+    if "TS" in wx:
+        label, icon = "Orage", "storm"
+    elif "SN" in wx or "SG" in wx or "PL" in wx:
+        label, icon = "Neige", "snow"
+    elif "RA" in wx or "DZ" in wx or "SH" in wx:
+        label, icon = ("Pluie faible", "drizzle") if ("-" in wx or "DZ" in wx) else ("Pluie", "rain")
+    elif "FG" in wx:
+        label, icon = "Brouillard", "fog"
+    else:
+        couches = [c.get("cover") for c in (m.get("clouds") or [])]
+        pire = next((c for c in ("OVX", "OVC", "BKN", "SCT", "FEW") if c in couches), None)
+        label, icon = COUV.get(pire, ("Ciel dégagé", "sun"))
+    print("Observé à Biarritz", quand.strftime("%H:%M"), ":", m.get("rawOb"), "->", label)
+    return (quand.strftime("%Y-%m-%dT%H"), label, icon)
+
+
 def ciel(h, i):
     """(libellé, icône) de l'heure n° i.
 
@@ -154,12 +187,16 @@ def ciel(h, i):
     un voile de nuages d'altitude (cirrus), qui laisse passer le soleil, suffit à
     afficher « Couvert ». Hors pluie, neige, brouillard ou orage, on refait donc le
     ciel à partir des nuages bas et moyens ; un voile d'altitude seul donne « Ciel voilé ».
+    Pour l'heure en cours, le ciel réellement observé à l'aéroport de Biarritz (METAR)
+    remplace la prévision quand il est disponible.
     La nuit, la lune remplace le soleil.
     """
     code = h["weather_code"][i]
     label, icon = WMO.get(code, ("", "cloud"))
     bas, moy, haut = val(h, "cloud_cover_low", i), val(h, "cloud_cover_mid", i), val(h, "cloud_cover_high", i)
-    if code in (0, 1, 2, 3) and None not in (bas, moy, haut):
+    if OBS and h["time"][i][:13] == OBS[0]:
+        label, icon = OBS[1], OBS[2]
+    elif code in (0, 1, 2, 3) and None not in (bas, moy, haut):
         eff = max(bas, moy)
         if eff < 20:
             label, icon = ("Ciel voilé" if haut >= 60 else "Ciel dégagé"), "sun"
@@ -447,6 +484,7 @@ if __name__ == "__main__":
         t = data.get("_tempo", {})
         source = "test"
         al = data.get("_alertes", [])
+        OBS = tuple(data["_obs"]) if data.get("_obs") else None
     else:
         try:
             data = get_json(URL + "&models=" + MODELE)
@@ -469,6 +507,11 @@ if __name__ == "__main__":
             print("Vigilance indisponible :", e)
             al = []
     maintenant = datetime.datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    if len(sys.argv) <= 2:
+        try:
+            OBS = observation(maintenant)
+        except Exception as e:     # pas d'observation : on garde la prévision
+            print("Observation Biarritz indisponible :", e)
     hh = data["hourly"]                     # journal : nuages bas / moyens / hauts des prochaines heures
     for i in range(3, min(11, len(hh["time"]))):
         print(hh["time"][i][11:16], "code", hh["weather_code"][i], "nuages b/m/h",
@@ -476,6 +519,8 @@ if __name__ == "__main__":
               "->", ciel(hh, i)[0])
     html = render(data, t, maintenant, al)    # échoue avant d'écrire si les données sont incomplètes
     html += "<!-- Source des prévisions : %s -->\n" % source
+    html += "<!-- Ciel observé (METAR Biarritz) : %s -->\n" % (
+        "%sh %s" % (OBS[0][11:13], OBS[1]) if OBS else "aucun (prévision seule)")
     html += "<!-- Nuages bas/moyens/hauts (%%) : %s -->\n" % " ; ".join(
         "%s %s/%s/%s code %s" % (hh["time"][i][11:13], val(hh, "cloud_cover_low", i), val(hh, "cloud_cover_mid", i),
                                   val(hh, "cloud_cover_high", i), hh["weather_code"][i])
