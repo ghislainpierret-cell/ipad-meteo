@@ -32,7 +32,7 @@ URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
        ",cloud_cover_low,cloud_cover_mid,cloud_cover_high,is_day"
        "&past_hours=3&forecast_hours=%d"
        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration"
-       % (LAT, LON, HEURES + 1))
+       % (LAT, LON, 24 * 7))   # 7 jours d'heures pour les icônes des jours ; 48 h embarquées
 
 # Modèles Météo-France (AROME 1,3-2,5 km sur 2 jours, puis ARPEGE jusqu'à 4 jours).
 # Ce qu'ils ne fournissent pas (probabilité de pluie, jours au-delà de 4 jours) est
@@ -230,14 +230,42 @@ def bloc_heure(h, i, t):
     return haut, ligne_tempo(t, h["time"][i])
 
 
-def ligne_jours(day, k):
+def icone_jour(h, date):
+    """Icône du jour d'après les heures de 9 h à 18 h (temps dominant, comme l'appli
+    Météo-France) ; le code journalier d'Open-Meteo, lui, retient l'heure la plus
+    défavorable : une seule heure nuageuse ou de bruine suffisait à griser la journée.
+    None si les heures manquent."""
+    idx = [i for i, t in enumerate(h["time"]) if t[:10] == date and 9 <= int(t[11:13]) <= 18]
+    if len(idx) < 6:
+        return None
+    pluie = sum(h["precipitation"][i] or 0 for i in idx)
+    kinds = [ciel(h, i)[1] for i in idx]
+    for k in ("storm", "snow"):
+        if kinds.count(k) >= 2:
+            return k
+    if pluie >= 5:
+        return "rain"
+    if pluie >= 1:
+        return "drizzle"
+    if kinds.count("fog") >= 5:
+        return "fog"
+    soleil = sum(1 for k in kinds if k in ("sun", "moon"))
+    nuage = sum(1 for k in kinds if k not in ("sun", "moon", "partly", "partly_n"))
+    if soleil >= len(kinds) * 0.6:
+        return "sun"
+    if nuage >= len(kinds) * 0.6:
+        return "cloud"
+    return "partly"
+
+
+def ligne_jours(day, k, h=None):
     """Les 5 colonnes de prévisions à partir du jour n° k."""
     rows = ""
     for i in range(k, min(k + 5, len(day["time"]))):
         if day["temperature_2m_max"][i] is None or day["temperature_2m_min"][i] is None:
             break          # au-delà de l'échéance des modèles
         wd = time.strptime(day["time"][i], "%Y-%m-%d").tm_wday
-        _, i2 = WMO.get(day["weather_code"][i], ("", "cloud"))
+        i2 = (icone_jour(h, day["time"][i]) if h else None) or WMO.get(day["weather_code"][i], ("", "cloud"))[1]
         rows += ('<td><div class="j">%s</div><div class="ic">%s</div>'
                  '<div>%d° / %d°</div><div class="s">%s %%</div></td>') % (
             "Auj." if i == k else JOURS[wd], svg(i2, 70), round(day["temperature_2m_max"][i]),
@@ -330,21 +358,22 @@ def render(d, t, maintenant, al=None):
     h, day = d["hourly"], d["daily"]
     hautes, tempos = {}, {}
     for i, heure in enumerate(h["time"]):
-        if i < 3:          # les 3 heures passées ne servent qu'à la tendance de pression
+        if i < 3 or i >= 3 + HEURES:   # les 3 heures passées ne servent qu'à la tendance de pression
             continue
         hautes[heure[:13]], tempos[heure[:13]] = bloc_heure(h, i, t)
     # pluie heure par heure : [mm, probabilité %] ; la frise des 12 h est dessinée par l'iPad
-    pluie = {"t": [x[:13] for x in h["time"][3:]],
-             "mm": [round(x or 0, 1) for x in h["precipitation"][3:]],
-             "pr": [x or 0 for x in h["precipitation_probability"][3:]]}
+    fin = 3 + HEURES
+    pluie = {"t": [x[:13] for x in h["time"][3:fin]],
+             "mm": [round(x or 0, 1) for x in h["precipitation"][3:fin]],
+             "pr": [x or 0 for x in h["precipitation_probability"][3:fin]]}
     # frise heure par heure : heure, icône, température ; dessinée par l'iPad
-    kinds = [ciel(h, i)[1] for i in range(3, len(h["time"]))]
-    heures = {"t": [x[:13] for x in h["time"][3:]], "k": kinds,
-              "c": [round(x) for x in h["temperature_2m"][3:]]}
+    kinds = [ciel(h, i)[1] for i in range(3, min(fin, len(h["time"])))]
+    heures = {"t": [x[:13] for x in h["time"][3:fin]], "k": kinds,
+              "c": [round(x) for x in h["temperature_2m"][3:fin]]}
     icones = dict((k, ICONS[k]) for k in set(kinds) if k in ICONS)
     jours, cieux = {}, {}
     for k in range(3):     # aujourd'hui, demain, après-demain
-        jours[day["time"][k]] = ligne_jours(day, k)
+        jours[day["time"][k]] = ligne_jours(day, k, h)
         cieux[day["time"][k]] = ligne_ciel(day, k)
     cle = maintenant.strftime("%Y-%m-%dT%H")
     if cle not in hautes:
