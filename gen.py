@@ -476,6 +476,10 @@ if __name__ == "__main__":
               "->", ciel(hh, i)[0])
     html = render(data, t, maintenant, al)    # échoue avant d'écrire si les données sont incomplètes
     html += "<!-- Source des prévisions : %s -->\n" % source
+    html += "<!-- Nuages bas/moyens/hauts (%%) : %s -->\n" % " ; ".join(
+        "%s %s/%s/%s code %s" % (hh["time"][i][11:13], val(hh, "cloud_cover_low", i), val(hh, "cloud_cover_mid", i),
+                                  val(hh, "cloud_cover_high", i), hh["weather_code"][i])
+        for i in range(3, min(11, len(hh["time"]))))
     with open(sortie, "w", encoding="utf-8") as f:
         f.write(html)
     print("Page écrite :", sortie, "(%d Ko)" % (len(html.encode("utf-8")) // 1024))
