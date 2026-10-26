@@ -29,6 +29,7 @@ VIEUX_HEURES = 12     # au-delà, l'heure des prévisions s'affiche en rouge
 URL = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s"
        "&timezone=Europe%%2FParis&forecast_days=7"
        "&hourly=temperature_2m,weather_code,wind_speed_10m,pressure_msl,precipitation,precipitation_probability"
+       ",cloud_cover_low,cloud_cover_mid,cloud_cover_high,is_day"
        "&past_hours=3&forecast_hours=%d"
        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,daylight_duration"
        % (LAT, LON, HEURES + 1))
@@ -79,9 +80,12 @@ DROPS = '<g stroke="#5af" stroke-width="6" stroke-linecap="round"><line x1="38" 
 FLAKES = '<g fill="#cef"><circle cx="38" cy="82" r="5"/><circle cx="54" cy="88" r="5"/><circle cx="70" cy="82" r="5"/></g>'
 BOLT = '<polygon points="55,66 42,86 52,86 47,100 66,76 55,76" fill="#fc3"/>'
 FOG = '<g stroke="#9ab" stroke-width="7" stroke-linecap="round"><line x1="22" y1="40" x2="78" y2="40"/><line x1="14" y1="56" x2="86" y2="56"/><line x1="26" y1="72" x2="74" y2="72"/></g>'
+MOON = '<path d="M60 14A36 36 0 1 0 86 66A30 30 0 0 1 60 14z" fill="#dde"/>'
+SMALL_MOON = '<path d="M36 10A20 20 0 1 0 54 40A17 17 0 0 1 36 10z" fill="#dde"/>'
 ICONS = {
-    "sun": SUN, "fog": FOG,
+    "sun": SUN, "fog": FOG, "moon": MOON,
     "partly": SMALL_SUN + CLOUD % {"c": "#bcd"},
+    "partly_n": SMALL_MOON + CLOUD % {"c": "#9ab"},
     "cloud": CLOUD % {"c": "#9ab"},
     "drizzle": CLOUD % {"c": "#9ab"} + DROPS.replace("78", "76").replace("90", "86"),
     "rain": CLOUD % {"c": "#789"} + DROPS,
@@ -138,9 +142,43 @@ def ligne_tempo(t, heure):
     return '<div id="tempo">EDF Tempo · auj. %s &nbsp; demain %s</div>' % (pastille(t[auj]), pastille(t.get(dem, 0)))
 
 
+def val(h, var, i):
+    v = h.get(var)
+    return v[i] if v and i < len(v) else None
+
+
+def ciel(h, i):
+    """(libellé, icône) de l'heure n° i.
+
+    Le code « temps » fourni par Open-Meteo vient de la couverture nuageuse TOTALE :
+    un voile de nuages d'altitude (cirrus), qui laisse passer le soleil, suffit à
+    afficher « Couvert ». Hors pluie, neige, brouillard ou orage, on refait donc le
+    ciel à partir des nuages bas et moyens ; un voile d'altitude seul donne « Ciel voilé ».
+    La nuit, la lune remplace le soleil.
+    """
+    code = h["weather_code"][i]
+    label, icon = WMO.get(code, ("", "cloud"))
+    bas, moy, haut = val(h, "cloud_cover_low", i), val(h, "cloud_cover_mid", i), val(h, "cloud_cover_high", i)
+    if code in (0, 1, 2, 3) and None not in (bas, moy, haut):
+        eff = max(bas, moy)
+        if eff < 20:
+            label, icon = ("Ciel voilé" if haut >= 60 else "Ciel dégagé"), "sun"
+        elif eff < 45:
+            label, icon = "Peu nuageux", "partly"
+        elif eff < 80:
+            label, icon = "Éclaircies", "partly"
+        else:
+            label, icon = "Couvert", "cloud"
+    if val(h, "is_day", i) == 0:
+        icon = {"sun": "moon", "partly": "partly_n"}.get(icon, icon)
+        if label == "Ciel dégagé":
+            label = "Nuit claire"
+    return label, icon
+
+
 def bloc_heure(h, i, t):
     """Partie haute de la page pour l'heure n° i des prévisions horaires."""
-    label, icon = WMO.get(h["weather_code"][i], ("", "cloud"))
+    label, icon = ciel(h, i)
     txt = "Pression %d hPa" % round(h["pressure_msl"][i])
     if i >= 3:
         ecart = h["pressure_msl"][i] - h["pressure_msl"][i - 3]
@@ -151,7 +189,7 @@ def bloc_heure(h, i, t):
         else:
             txt += " · stable"
     haut = ('%s<div id="t">%d°</div><div class="v">%s · vent %d km/h</div><div class="v2">%s</div>'
-            % (svg(icon, 100), round(h["temperature_2m"][i]), label, round(h["wind_speed_10m"][i]), txt))
+            % (svg(icon, 84), round(h["temperature_2m"][i]), label, round(h["wind_speed_10m"][i]), txt))
     return haut, ligne_tempo(t, h["time"][i])
 
 
@@ -262,10 +300,15 @@ def render(d, t, maintenant, al=None):
     pluie = {"t": [x[:13] for x in h["time"][3:]],
              "mm": [round(x or 0, 1) for x in h["precipitation"][3:]],
              "pr": [x or 0 for x in h["precipitation_probability"][3:]]}
-    jours, ciel = {}, {}
+    # frise heure par heure : heure, icône, température ; dessinée par l'iPad
+    kinds = [ciel(h, i)[1] for i in range(3, len(h["time"]))]
+    heures = {"t": [x[:13] for x in h["time"][3:]], "k": kinds,
+              "c": [round(x) for x in h["temperature_2m"][3:]]}
+    icones = dict((k, ICONS[k]) for k in set(kinds) if k in ICONS)
+    jours, cieux = {}, {}
     for k in range(3):     # aujourd'hui, demain, après-demain
         jours[day["time"][k]] = ligne_jours(day, k)
-        ciel[day["time"][k]] = ligne_ciel(day, k)
+        cieux[day["time"][k]] = ligne_ciel(day, k)
     cle = maintenant.strftime("%Y-%m-%dT%H")
     if cle not in hautes:
         cle = sorted(hautes)[0]
@@ -294,11 +337,17 @@ td{width:20%%}
 .lu{font-size:22px}
 .so{color:#fc3}
 .al{display:inline-block;margin-left:10px;padding:1px 10px;border-radius:10px;font-size:20px;font-weight:bold;vertical-align:4px}
+#frise{width:94%%;margin:6px auto 0}
+#frise table{margin:0;font-size:22px}
+#frise td{width:auto;padding:2px 0;border-radius:10px}
+#frise .fh{font-size:16px;color:#9ab}
+#frise td.now{background:#1c2430}
+#frise td.now .fh{color:#fff;font-weight:bold}
 #pluie{width:86%%;margin:10px auto 0;font-size:14px;color:#667}
 #pluie table{margin:0}
 #pluie td{width:auto;vertical-align:bottom;padding:0 2px;font-size:14px;color:#667}
 .bar{background:#5af;border-radius:3px 3px 0 0;margin:0 auto;width:80%%}
-.sec{font-size:20px;color:#678;padding:14px 0}
+.sec{font-size:20px;color:#678;padding:6px 0}
 .tp{display:inline-block;padding:2px 12px;border-radius:12px;font-weight:bold}
 .tp.nc{color:#667;border:1px solid #445;font-weight:normal}
 #maj{color:#556;font-size:16px;margin-top:10px}
@@ -307,6 +356,7 @@ td{width:20%%}
 <div id="h">--:--</div>
 <div class="v">%(ville)s<span id="al"></span></div>
 <div id="haut">%(haut0)s</div>
+<div id="frise"></div>
 <div id="pluie"></div>
 <div id="jours">%(jours0)s</div>
 <div id="tp">%(tempo0)s</div>
@@ -318,6 +368,8 @@ var TEMPO=%(tempos)s;
 var JOURS=%(jours)s;
 var CIEL=%(ciels)s;
 var PLUIE=%(pluie)s;
+var HEURES=%(heures)s;
+var ICONES=%(icones)s;
 var ALERTES=%(alertes)s;
 var COUL=["","#f2c200","#f28c00","#e01b1b"], TXT=["","#000","#000","#fff"];
 // Vigilances en cours (jaune / orange / rouge), avec leur heure de fin
@@ -353,13 +405,25 @@ function pluie(cle){
   return '<div style="text-align:left;margin-bottom:2px">Pluie 12 h · max '+String(mx).replace(".",",")+' mm/h</div>'+
     '<table><tr style="height:46px">'+html+'</tr><tr>'+lab+'</tr></table>';
 }
+// Frise des 8 prochaines heures : heure, icône du ciel, température
+function frise(cle){
+  var i, k=-1, n=8, html="";
+  for(i=0;i<HEURES.t.length;i++){ if(HEURES.t[i]===cle){ k=i; break; } }
+  if(k<0) return "";
+  for(i=k;i<k+n&&i<HEURES.t.length;i++){
+    html+='<td'+(i===k?' class="now"':'')+'><div class="fh">'+HEURES.t[i].substring(11,13)+'h</div>'+
+      '<svg width="42" height="42" viewBox="0 0 100 100" style="display:block;margin:0 auto">'+(ICONES[HEURES.k[i]]||"")+'</svg>'+
+      '<div>'+HEURES.c[i]+'°</div></td>';
+  }
+  return '<table><tr>'+html+'</tr></table>';
+}
 function tick(){
   var d=new Date();
   $("h").innerHTML=p(d.getHours())+":"+p(d.getMinutes());
   $("al").innerHTML=vigilance();
   var jour=d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
   var cle=jour+"T"+p(d.getHours());
-  if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; $("pluie").innerHTML=pluie(cle); dejaH=cle; }
+  if(cle!==dejaH && HAUT[cle]){ $("haut").innerHTML=HAUT[cle]; $("tp").innerHTML=TEMPO[cle]; $("frise").innerHTML=frise(cle); $("pluie").innerHTML=pluie(cle); dejaH=cle; }
   if(jour!==dejaJ && JOURS[jour]){ $("jours").innerHTML=JOURS[jour]; $("ciel").innerHTML=CIEL[jour]; dejaJ=jour; }
   var vieux=(d.getTime()-GEN>%(vieux)d*3600000)||!HAUT[cle];
   $("maj").className=vieux?"err":"";
@@ -370,7 +434,8 @@ tick();setInterval(tick,10000);
 """ % dict(refresh=REFRESH_SECONDS, ville=VILLE, haut0=hautes[cle], tempo0=tempos[cle],
            jours0=jours[day["time"][0]], jour0=day["time"][0], cle=cle,
            hautes=js(hautes), tempos=js(tempos), jours=js(jours),
-           ciel0=ciel[day["time"][0]], ciels=js(ciel), pluie=js(pluie), alertes=js(al or []),
+           ciel0=cieux[day["time"][0]], ciels=js(cieux), pluie=js(pluie), alertes=js(al or []),
+           heures=js(heures), icones=js(icones),
            gen=maintenant.strftime("%H:%M"), gy=maintenant.year, gmo=maintenant.month - 1,
            gd=maintenant.day, gh=maintenant.hour, gmi=maintenant.minute, vieux=VIEUX_HEURES)
 
@@ -404,6 +469,11 @@ if __name__ == "__main__":
             print("Vigilance indisponible :", e)
             al = []
     maintenant = datetime.datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
+    hh = data["hourly"]                     # journal : nuages bas / moyens / hauts des prochaines heures
+    for i in range(3, min(11, len(hh["time"]))):
+        print(hh["time"][i][11:16], "code", hh["weather_code"][i], "nuages b/m/h",
+              val(hh, "cloud_cover_low", i), val(hh, "cloud_cover_mid", i), val(hh, "cloud_cover_high", i),
+              "->", ciel(hh, i)[0])
     html = render(data, t, maintenant, al)    # échoue avant d'écrire si les données sont incomplètes
     html += "<!-- Source des prévisions : %s -->\n" % source
     with open(sortie, "w", encoding="utf-8") as f:
